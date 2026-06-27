@@ -54,6 +54,11 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
   useEffect(() => {
     loadHistory();
 
+    // Poll server for new messages every 2 seconds
+    const intervalId = window.setInterval(() => {
+      loadHistory();
+    }, 2000);
+
     // Create a BroadcastChannel for instantaneous multi-tab real-time communication
     try {
       const channel = new BroadcastChannel('security_team_chat_channel');
@@ -77,6 +82,7 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
       }
+      clearInterval(intervalId);
     };
   }, []);
 
@@ -88,6 +94,35 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
   }, [messages]);
 
   const loadHistory = async () => {
+    try {
+      // Try to load from server first for multi-device sync
+      const res = await fetch('/api/chat');
+      if (res.ok) {
+        const serverMessages = await res.json();
+        
+        // Sincroniza localmente com IndexedDB para backup offline
+        for (const msg of serverMessages) {
+          try {
+            await saveChatMessage(msg);
+          } catch (e) {
+            // ignore duplicates or write errors
+          }
+        }
+        
+        // Evita re-render desnecessário se as mensagens forem iguais
+        setMessages((prev) => {
+          if (JSON.stringify(prev) === JSON.stringify(serverMessages)) {
+            return prev;
+          }
+          return serverMessages;
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn('Servidor offline ou inacessível. Carregando dados locais do IndexedDB...', err);
+    }
+
+    // Fallback local
     try {
       const hist = await getAllChatMessages();
       setMessages(hist);
@@ -120,12 +155,24 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
       text: textToSend
     };
 
+    // Save locally first
     try {
       await saveChatMessage(newMsg);
+    } catch (err) {}
+
+    // Send to backend
+    try {
+      await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(newMsg),
+      });
       await loadHistory();
       broadcastUpdate('new-message');
     } catch (err) {
-      setFeedbackError('Ocorreu um erro ao enviar a mensagem.');
+      setFeedbackError('Ocorreu um erro ao sincronizar a mensagem com o servidor.');
     }
   };
 
@@ -174,10 +221,20 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
 
       try {
         await saveChatMessage(newMsg);
+      } catch (err) {}
+
+      try {
+        await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newMsg),
+        });
         await loadHistory();
         broadcastUpdate('new-message');
       } catch (err) {
-        setFeedbackError('Falha ao anexar o arquivo.');
+        setFeedbackError('Falha ao enviar arquivo para o servidor de arquivos.');
       }
     };
 
@@ -315,6 +372,7 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
 
     try {
       await clearChatHistory();
+      await fetch('/api/chat/clear', { method: 'POST' });
       await loadHistory();
       broadcastUpdate('clear-chat');
     } catch (err) {

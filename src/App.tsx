@@ -85,11 +85,156 @@ export default function App() {
     setActiveTab('tasks');
   };
 
-  // Initialize History on Mount
+  // --- 4. Server Sync & Local Cache ---
+  const saveAndSyncSpreadsheet = async (newTasks: Task[], newStyles: Record<string, CellStyle>, updateHistory: boolean = true) => {
+    // A. Update local state
+    setTasks(newTasks);
+    setCellStyles(newStyles);
+    
+    // B. Cache in localStorage for fallback/speed
+    localStorage.setItem('excel_tasks', JSON.stringify(newTasks));
+    localStorage.setItem('excel_cell_styles', JSON.stringify(newStyles));
+
+    // C. Save to History
+    if (updateHistory) {
+      saveToHistory(newTasks, newStyles);
+    }
+
+    // D. Send to backend server
+    try {
+      await fetch('/api/spreadsheet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tasks: newTasks, cellStyles: newStyles }),
+      });
+    } catch (e) {
+      console.error('Falha ao sincronizar planilha com o servidor', e);
+    }
+
+    // E. Broadcast to other tabs
+    try {
+      const channel = new BroadcastChannel('security_team_spreadsheet_channel');
+      channel.postMessage({
+        type: 'spreadsheet-update',
+        payload: { tasks: newTasks, styles: newStyles }
+      });
+      channel.close();
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  // Fetch initial spreadsheet from server on mount
   useEffect(() => {
-    setHistory([{ tasks, styles: cellStyles }]);
-    setHistoryIndex(0);
+    const fetchInitialData = async () => {
+      try {
+        const res = await fetch('/api/spreadsheet');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tasks) {
+            setTasks(data.tasks);
+            setCellStyles(data.cellStyles || {});
+            
+            // Cache locally
+            localStorage.setItem('excel_tasks', JSON.stringify(data.tasks));
+            localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
+            
+            // Set first item in history
+            setHistory([{ tasks: data.tasks, styles: data.cellStyles || {} }]);
+            setHistoryIndex(0);
+          }
+        }
+      } catch (e) {
+        console.error('Falha ao obter dados da planilha do servidor', e);
+      }
+    };
+    fetchInitialData();
   }, []);
+
+  // BroadcastChannel for instant multi-tab synchronization of same browser
+  useEffect(() => {
+    try {
+      const channel = new BroadcastChannel('security_team_spreadsheet_channel');
+      channel.onmessage = (event) => {
+        if (event.data && event.data.type === 'spreadsheet-update') {
+          const { tasks: updatedTasks, styles: updatedStyles } = event.data.payload;
+          setTasks(updatedTasks);
+          setCellStyles(updatedStyles);
+        }
+      };
+      return () => {
+        channel.close();
+      };
+    } catch (e) {
+      console.warn('BroadcastChannel não suportado neste navegador.', e);
+    }
+  }, []);
+
+  // Storage listener fallback for other windows/tabs
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'excel_tasks' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setTasks(parsed);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      if (e.key === 'excel_cell_styles' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          setCellStyles(parsed);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, []);
+
+  // Polling Spreadsheet Updates from the Server every 1.5 seconds (Multi-device Real-time Sync)
+  useEffect(() => {
+    let intervalId: number;
+    
+    const pollSpreadsheet = async () => {
+      // Skip polling updates if the user is currently editing a cell to prevent interrupting their typing
+      if (editingCell) return;
+      
+      try {
+        const res = await fetch('/api/spreadsheet');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.tasks) {
+            const currentTasksStr = JSON.stringify(tasks);
+            const incomingTasksStr = JSON.stringify(data.tasks);
+            const currentStylesStr = JSON.stringify(cellStyles);
+            const incomingStylesStr = JSON.stringify(data.cellStyles || {});
+            
+            if (currentTasksStr !== incomingTasksStr || currentStylesStr !== incomingStylesStr) {
+              setTasks(data.tasks);
+              setCellStyles(data.cellStyles || {});
+              
+              // Cache in local storage
+              localStorage.setItem('excel_tasks', JSON.stringify(data.tasks));
+              localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao buscar atualizações periódicas da planilha', e);
+      }
+    };
+
+    intervalId = window.setInterval(pollSpreadsheet, 1500);
+    return () => clearInterval(intervalId);
+  }, [tasks, cellStyles, editingCell]);
 
   // --- 4. History Helpers ---
   const saveToHistory = (newTasks: Task[], newStyles: Record<string, CellStyle>) => {
@@ -111,10 +256,7 @@ export default function App() {
       const prevIndex = historyIndex - 1;
       const prevState = history[prevIndex];
       setHistoryIndex(prevIndex);
-      setTasks(prevState.tasks);
-      setCellStyles(prevState.styles);
-      localStorage.setItem('excel_tasks', JSON.stringify(prevState.tasks));
-      localStorage.setItem('excel_cell_styles', JSON.stringify(prevState.styles));
+      saveAndSyncSpreadsheet(prevState.tasks, prevState.styles, false);
     }
   };
 
@@ -123,10 +265,7 @@ export default function App() {
       const nextIndex = historyIndex + 1;
       const nextState = history[nextIndex];
       setHistoryIndex(nextIndex);
-      setTasks(nextState.tasks);
-      setCellStyles(nextState.styles);
-      localStorage.setItem('excel_tasks', JSON.stringify(nextState.tasks));
-      localStorage.setItem('excel_cell_styles', JSON.stringify(nextState.styles));
+      saveAndSyncSpreadsheet(nextState.tasks, nextState.styles, false);
     }
   };
 
@@ -167,9 +306,7 @@ export default function App() {
       return t;
     });
 
-    setTasks(updatedTasks);
-    localStorage.setItem('excel_tasks', JSON.stringify(updatedTasks));
-    saveToHistory(updatedTasks, cellStyles);
+    saveAndSyncSpreadsheet(updatedTasks, cellStyles);
   };
 
   const handleAddRow = () => {
@@ -190,9 +327,7 @@ export default function App() {
     };
 
     const updatedTasks = [...tasks, newTask];
-    setTasks(updatedTasks);
-    localStorage.setItem('excel_tasks', JSON.stringify(updatedTasks));
-    saveToHistory(updatedTasks, cellStyles);
+    saveAndSyncSpreadsheet(updatedTasks, cellStyles);
 
     // Auto-select the newly added task title field
     setSelectedCell({ rowId: nextId, field: 'title' });
@@ -212,14 +347,10 @@ export default function App() {
       }
     });
 
-    setTasks(updatedTasks);
-    setCellStyles(updatedStyles);
     setSelectedCell(null);
     setEditingCell(null);
 
-    localStorage.setItem('excel_tasks', JSON.stringify(updatedTasks));
-    localStorage.setItem('excel_cell_styles', JSON.stringify(updatedStyles));
-    saveToHistory(updatedTasks, updatedStyles);
+    saveAndSyncSpreadsheet(updatedTasks, updatedStyles);
   };
 
   const handleApplyStyle = (styleToApply: Partial<CellStyle>) => {
@@ -232,9 +363,7 @@ export default function App() {
       [styleKey]: { ...currentStyle, ...styleToApply },
     };
 
-    setCellStyles(updatedStyles);
-    localStorage.setItem('excel_cell_styles', JSON.stringify(updatedStyles));
-    saveToHistory(tasks, updatedStyles);
+    saveAndSyncSpreadsheet(tasks, updatedStyles);
   };
 
   const handleClearStyles = () => {
@@ -244,9 +373,7 @@ export default function App() {
     const updatedStyles = { ...cellStyles };
     delete updatedStyles[styleKey];
 
-    setCellStyles(updatedStyles);
-    localStorage.setItem('excel_cell_styles', JSON.stringify(updatedStyles));
-    saveToHistory(tasks, updatedStyles);
+    saveAndSyncSpreadsheet(tasks, updatedStyles);
   };
 
   // --- 6. CSV Import / Export Logic ---

@@ -9,7 +9,7 @@ export interface ManagedUser {
 
 // Initial hardcoded list of users
 const DEFAULT_USERS: { username: string; name: string; defaultRole: 'admin' | 'user' }[] = [
-  { username: 'L.SOARES', name: 'Leonardo Soares', defaultRole: 'user' },
+  { username: 'L.SOARES', name: 'Leonardo Soares', defaultRole: 'admin' },
   { username: 'L.FPINHO', name: 'Luís Pinho', defaultRole: 'admin' },
   { username: 'L.FREITAS', name: 'Luiza Freitas', defaultRole: 'user' },
   { username: 'F.CARVALHO', name: 'Fabio Carvalho', defaultRole: 'user' },
@@ -60,7 +60,10 @@ export const getUsersList = (): ManagedUser[] => {
   const customPasswords = getStoredPasswords();
 
   return DEFAULT_USERS.map((user) => {
-    const role = customRoles[user.username] || user.defaultRole;
+    let role = customRoles[user.username] || user.defaultRole;
+    if (user.username === 'L.SOARES' || user.username === 'L.FPINHO') {
+      role = 'admin';
+    }
     const hasCustomPassword = !!customPasswords[user.username];
     return {
       username: user.username,

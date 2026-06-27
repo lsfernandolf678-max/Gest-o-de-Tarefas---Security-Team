@@ -555,11 +555,13 @@ export default function SpreadsheetGrid({
                               <div className="flex items-center space-x-2 w-full pr-1 font-mono">
                                 <div className="w-12 bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200 hidden xs:block">
                                   <div 
-                                    className="bg-emerald-600 h-full rounded-full transition-all duration-300" 
+                                    className={`${Number(value) === 100 ? 'bg-emerald-500' : 'bg-emerald-600'} h-full rounded-full transition-all duration-300`} 
                                     style={{ width: `${value}%` }} 
                                   />
                                 </div>
-                                <span className="text-slate-600 font-semibold">{value}%</span>
+                                <span className={Number(value) === 100 ? "text-emerald-600 font-bold" : "text-slate-600 font-semibold"}>
+                                  {value}%
+                                </span>
                               </div>
                             ) : col.field === 'deadline' && value ? (
                               <div className="flex items-center space-x-1.5 text-slate-600 font-mono">
