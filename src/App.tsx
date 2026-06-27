@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { COLUMNS, INITIAL_TASKS } from './constants';
 import { Task, CellStyle, CellSelection, TaskField, SheetTab, UserSession } from './types';
 import Toolbar from './components/Toolbar';
@@ -16,6 +16,7 @@ import TaskDetailView from './components/TaskDetailView';
 import LoginScreen from './components/LoginScreen';
 import UserManagementSheet from './components/UserManagementSheet';
 import ChatSheet from './components/ChatSheet';
+import EmailLogsModal from './components/EmailLogsModal';
 
 export default function App() {
   // --- 1. Core States ---
@@ -60,6 +61,7 @@ export default function App() {
   const [editingCell, setEditingCell] = useState<CellSelection | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'tasks' | 'dashboard' | 'help' | 'users'>('tasks');
+  const [showEmailLogs, setShowEmailLogs] = useState(false);
 
   // --- 2. Sorting & Filtering States ---
   const [sortBy, setSortBy] = useState<{ field: TaskField | null; direction: 'asc' | 'desc' | null }>({
@@ -85,9 +87,42 @@ export default function App() {
     setActiveTab('tasks');
   };
 
+  const syncTimeoutRef = useRef<number | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Debounced server sync helper to prevent overwriting edits during active typing
+  const debounceSyncWithServer = (currentTasks: Task[], currentStyles: Record<string, CellStyle>) => {
+    if (syncTimeoutRef.current) {
+      window.clearTimeout(syncTimeoutRef.current);
+    }
+    
+    syncTimeoutRef.current = window.setTimeout(async () => {
+      try {
+        await fetch('/api/spreadsheet', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ tasks: currentTasks, cellStyles: currentStyles }),
+        });
+      } catch (e) {
+        console.error('Falha ao sincronizar planilha com o servidor', e);
+      }
+    }, 700); // 700ms debounce
+  };
+
+  // Toast auto-clear
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   // --- 4. Server Sync & Local Cache ---
   const saveAndSyncSpreadsheet = async (newTasks: Task[], newStyles: Record<string, CellStyle>, updateHistory: boolean = true) => {
-    // A. Update local state
+    // A. Update local state immediately for instant responsiveness
     setTasks(newTasks);
     setCellStyles(newStyles);
     
@@ -100,20 +135,10 @@ export default function App() {
       saveToHistory(newTasks, newStyles);
     }
 
-    // D. Send to backend server
-    try {
-      await fetch('/api/spreadsheet', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ tasks: newTasks, cellStyles: newStyles }),
-      });
-    } catch (e) {
-      console.error('Falha ao sincronizar planilha com o servidor', e);
-    }
+    // D. Queue the debounced server sync
+    debounceSyncWithServer(newTasks, newStyles);
 
-    // E. Broadcast to other tabs
+    // E. Broadcast to other tabs in the same browser instantly
     try {
       const channel = new BroadcastChannel('security_team_spreadsheet_channel');
       channel.postMessage({
@@ -126,24 +151,55 @@ export default function App() {
     }
   };
 
+  // Manual save spreadsheet handler
+  const handleSaveSpreadsheet = async () => {
+    setIsSaving(true);
+    if (syncTimeoutRef.current) {
+      window.clearTimeout(syncTimeoutRef.current);
+    }
+    try {
+      const res = await fetch('/api/spreadsheet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tasks, cellStyles }),
+      });
+      
+      if (res.ok) {
+        setToast({ message: 'Planilha salva com sucesso no servidor!', type: 'success' });
+      } else {
+        setToast({ message: 'Erro ao salvar planilha no servidor.', type: 'error' });
+      }
+    } catch (e) {
+      console.error(e);
+      setToast({ message: 'Falha de conexão ao salvar planilha.', type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // Fetch initial spreadsheet from server on mount
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
         const res = await fetch('/api/spreadsheet');
         if (res.ok) {
-          const data = await res.json();
-          if (data && data.tasks) {
-            setTasks(data.tasks);
-            setCellStyles(data.cellStyles || {});
-            
-            // Cache locally
-            localStorage.setItem('excel_tasks', JSON.stringify(data.tasks));
-            localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
-            
-            // Set first item in history
-            setHistory([{ tasks: data.tasks, styles: data.cellStyles || {} }]);
-            setHistoryIndex(0);
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data && data.tasks) {
+              setTasks(data.tasks);
+              setCellStyles(data.cellStyles || {});
+              
+              // Cache locally
+              localStorage.setItem('excel_tasks', JSON.stringify(data.tasks));
+              localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
+              
+              // Set first item in history
+              setHistory([{ tasks: data.tasks, styles: data.cellStyles || {} }]);
+              setHistoryIndex(0);
+            }
           }
         }
       } catch (e) {
@@ -199,31 +255,50 @@ export default function App() {
     };
   }, []);
 
-  // Polling Spreadsheet Updates from the Server every 1.5 seconds (Multi-device Real-time Sync)
+  // Polling Spreadsheet Updates from the Server every 1.5 seconds (Multi-device Real-time Sync with Smart Merge)
   useEffect(() => {
     let intervalId: number;
     
     const pollSpreadsheet = async () => {
-      // Skip polling updates if the user is currently editing a cell to prevent interrupting their typing
-      if (editingCell) return;
-      
       try {
         const res = await fetch('/api/spreadsheet');
         if (res.ok) {
-          const data = await res.json();
-          if (data && data.tasks) {
-            const currentTasksStr = JSON.stringify(tasks);
-            const incomingTasksStr = JSON.stringify(data.tasks);
-            const currentStylesStr = JSON.stringify(cellStyles);
-            const incomingStylesStr = JSON.stringify(data.cellStyles || {});
-            
-            if (currentTasksStr !== incomingTasksStr || currentStylesStr !== incomingStylesStr) {
-              setTasks(data.tasks);
-              setCellStyles(data.cellStyles || {});
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data && data.tasks) {
+              // Smart Merge of incoming server tasks with local tasks to avoid losing any active keystrokes
+              let updatedTasks = data.tasks;
               
-              // Cache in local storage
-              localStorage.setItem('excel_tasks', JSON.stringify(data.tasks));
-              localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
+              if (editingCell) {
+                updatedTasks = data.tasks.map((serverTask: Task) => {
+                  const localTask = tasks.find(t => t.id === serverTask.id);
+                  if (!localTask) return serverTask;
+                  
+                  // If user is actively typing in this row and field, keep the local value
+                  if (serverTask.id === editingCell.rowId) {
+                    return {
+                      ...serverTask,
+                      [editingCell.field]: localTask[editingCell.field]
+                    };
+                  }
+                  return serverTask;
+                });
+              }
+              
+              const currentTasksStr = JSON.stringify(tasks);
+              const incomingTasksStr = JSON.stringify(updatedTasks);
+              const currentStylesStr = JSON.stringify(cellStyles);
+              const incomingStylesStr = JSON.stringify(data.cellStyles || {});
+              
+              if (currentTasksStr !== incomingTasksStr || currentStylesStr !== incomingStylesStr) {
+                setTasks(updatedTasks);
+                setCellStyles(data.cellStyles || {});
+                
+                // Cache in local storage
+                localStorage.setItem('excel_tasks', JSON.stringify(updatedTasks));
+                localStorage.setItem('excel_cell_styles', JSON.stringify(data.cellStyles || {}));
+              }
             }
           }
         }
@@ -577,6 +652,9 @@ export default function App() {
         hasSelection={!!selectedCell}
         currentUser={currentUser}
         onLogout={handleLogout}
+        onSaveSpreadsheet={handleSaveSpreadsheet}
+        isSaving={isSaving}
+        onOpenEmailLogs={() => setShowEmailLogs(true)}
       />
 
       {/* 2. Spreadsheet Formula Bar */}
@@ -647,6 +725,24 @@ export default function App() {
         }}
         tasks={tasks}
       />
+
+      {/* Dynamic Toast Notification */}
+      {toast && (
+        <div 
+          id="excel-toast" 
+          className={`fixed bottom-16 right-5 z-[9999] flex items-center gap-2 px-4 py-3 rounded-lg shadow-xl border text-xs font-semibold animate-bounce duration-500 bg-white ${
+            toast.type === 'error' ? 'border-rose-200 text-rose-800' : 'border-emerald-200 text-emerald-800'
+          }`}
+        >
+          <span className={`w-2.5 h-2.5 rounded-full ${toast.type === 'error' ? 'bg-rose-500' : 'bg-emerald-500'} animate-ping`} />
+          <span>{toast.message}</span>
+        </div>
+      )}
+
+      {/* Email Notification Audit Log Modal */}
+      {showEmailLogs && (
+        <EmailLogsModal onClose={() => setShowEmailLogs(false)} />
+      )}
     </div>
   );
 }

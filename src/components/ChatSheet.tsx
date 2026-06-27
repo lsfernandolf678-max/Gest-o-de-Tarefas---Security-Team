@@ -98,25 +98,28 @@ export default function ChatSheet({ currentUser }: ChatSheetProps) {
       // Try to load from server first for multi-device sync
       const res = await fetch('/api/chat');
       if (res.ok) {
-        const serverMessages = await res.json();
-        
-        // Sincroniza localmente com IndexedDB para backup offline
-        for (const msg of serverMessages) {
-          try {
-            await saveChatMessage(msg);
-          } catch (e) {
-            // ignore duplicates or write errors
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const serverMessages = await res.json();
+          
+          // Sincroniza localmente com IndexedDB para backup offline
+          for (const msg of serverMessages) {
+            try {
+              await saveChatMessage(msg);
+            } catch (e) {
+              // ignore duplicates or write errors
+            }
           }
+          
+          // Evita re-render desnecessário se as mensagens forem iguais
+          setMessages((prev) => {
+            if (JSON.stringify(prev) === JSON.stringify(serverMessages)) {
+              return prev;
+            }
+            return serverMessages;
+          });
+          return;
         }
-        
-        // Evita re-render desnecessário se as mensagens forem iguais
-        setMessages((prev) => {
-          if (JSON.stringify(prev) === JSON.stringify(serverMessages)) {
-            return prev;
-          }
-          return serverMessages;
-        });
-        return;
       }
     } catch (err) {
       console.warn('Servidor offline ou inacessível. Carregando dados locais do IndexedDB...', err);

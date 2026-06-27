@@ -24,7 +24,8 @@ import {
   Sparkles,
   Shield,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Mail
 } from 'lucide-react';
 import { CellStyle, UserSession } from '../types';
 import { PRESET_BG_COLORS, PRESET_TEXT_COLORS } from '../constants';
@@ -47,6 +48,9 @@ interface ToolbarProps {
   onGenerateTasksAI?: () => void; // Optional AI suggestion row
   currentUser: UserSession;
   onLogout: () => void;
+  onSaveSpreadsheet?: () => void;
+  isSaving?: boolean;
+  onOpenEmailLogs?: () => void;
 }
 
 export default function Toolbar({
@@ -66,7 +70,10 @@ export default function Toolbar({
   hasSelection,
   onGenerateTasksAI,
   currentUser,
-  onLogout
+  onLogout,
+  onSaveSpreadsheet,
+  isSaving = false,
+  onOpenEmailLogs
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showBgDropdown, setShowBgDropdown] = useState(false);
@@ -178,6 +185,45 @@ export default function Toolbar({
             >
               <Download className="w-3.5 h-3.5" />
               <span>Exportar CSV</span>
+            </button>
+
+            {/* Save Button */}
+            <button
+              onClick={onSaveSpreadsheet}
+              disabled={isSaving}
+              className={`text-xs px-2.5 py-1.5 rounded font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow border ${
+                isSaving
+                  ? 'bg-amber-600 text-white border-amber-500 cursor-wait'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+              }`}
+              title="Salvar Planilha de Tarefas permanentemente no Servidor"
+            >
+              <svg 
+                className={`w-3.5 h-3.5 ${isSaving ? 'animate-spin' : ''}`} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2.5" 
+                strokeLinecap="round" 
+                strokeLinejoin="round"
+              >
+                {isSaving ? (
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                ) : (
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z M17 21v-8H7v8 M7 3v5h8" />
+                )}
+              </svg>
+              <span>{isSaving ? 'Salvando...' : 'Salvar Planilha'}</span>
+            </button>
+
+            {/* Email notification audit logs */}
+            <button
+              onClick={onOpenEmailLogs}
+              className="text-xs bg-slate-800 text-slate-100 hover:bg-slate-700 hover:text-white px-2.5 py-1.5 rounded font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow border border-slate-700"
+              title="Auditoria de E-mails enviados para L.FPINHO@BTP.COM.BR"
+            >
+              <Mail className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Log de E-mails</span>
             </button>
 
             {/* Logout button */}
