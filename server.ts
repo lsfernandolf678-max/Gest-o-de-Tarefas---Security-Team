@@ -310,40 +310,48 @@ async function startServer() {
 
   // 2. Update spreadsheet tasks & cell styles
   app.post('/api/spreadsheet', (req, res) => {
-    const { tasks, cellStyles } = req.body;
-    if (!tasks) {
-      return res.status(400).json({ error: 'Faltando campo "tasks"' });
-    }
-
-    // Read previous spreadsheet tasks to detect new additions
-    const oldData = loadSpreadsheet();
-    const oldTasks = oldData.tasks || [];
-    const oldTaskIds = new Set(oldTasks.map((t: any) => t.id));
-
-    // Find if there are newly added tasks
-    const newlyAddedTasks = tasks.filter((t: any) => !oldTaskIds.has(t.id));
-
-    const newData = {
-      tasks,
-      cellStyles: cellStyles || {}
-    };
-    saveSpreadsheet(newData);
-
-    // Trigger emails asynchronously so it doesn't block the API response
-    if (newlyAddedTasks.length > 0) {
-      for (const newTask of newlyAddedTasks) {
-        // Send email to L.FPINHO@BTP.COM.BR
-        sendTaskNotificationEmail(newTask).catch(err => {
-          console.error('Erro em sendTaskNotificationEmail:', err);
-        });
+    try {
+      const { tasks, cellStyles } = req.body;
+      if (!tasks) {
+        return res.status(400).json({ error: 'Faltando campo "tasks"' });
       }
-    }
+      if (!Array.isArray(tasks)) {
+        return res.status(400).json({ error: 'O campo "tasks" deve ser um array.' });
+      }
 
-    res.json({ 
-      success: true, 
-      message: 'Planilha salva com sucesso!',
-      newlyAddedCount: newlyAddedTasks.length
-    });
+      // Read previous spreadsheet tasks to detect new additions
+      const oldData = loadSpreadsheet();
+      const oldTasks = oldData.tasks || [];
+      const oldTaskIds = new Set(oldTasks.map((t: any) => t?.id).filter(Boolean));
+
+      // Find if there are newly added tasks
+      const newlyAddedTasks = tasks.filter((t: any) => t && t.id && !oldTaskIds.has(t.id));
+
+      const newData = {
+        tasks,
+        cellStyles: cellStyles || {}
+      };
+      saveSpreadsheet(newData);
+
+      // Trigger emails asynchronously so it doesn't block the API response
+      if (newlyAddedTasks.length > 0) {
+        for (const newTask of newlyAddedTasks) {
+          // Send email to L.FPINHO@BTP.COM.BR
+          sendTaskNotificationEmail(newTask).catch(err => {
+            console.error('Erro em sendTaskNotificationEmail:', err);
+          });
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Planilha salva com sucesso!',
+        newlyAddedCount: newlyAddedTasks.length
+      });
+    } catch (error: any) {
+      console.error('Erro ao processar salvamento de planilha:', error);
+      res.status(500).json({ error: 'Erro interno do servidor ao salvar planilha: ' + error.message });
+    }
   });
 
   // 2.5 Get email notification logs for auditing

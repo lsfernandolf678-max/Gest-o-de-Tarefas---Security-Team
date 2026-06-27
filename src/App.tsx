@@ -169,11 +169,25 @@ export default function App() {
       if (res.ok) {
         setToast({ message: 'Planilha salva com sucesso no servidor!', type: 'success' });
       } else {
-        setToast({ message: 'Erro ao salvar planilha no servidor.', type: 'error' });
+        let errMsg = 'Erro ao salvar planilha no servidor.';
+        try {
+          const errData = await res.json();
+          if (errData && errData.error) {
+            errMsg = `Erro: ${errData.error}`;
+          }
+        } catch (_) {
+          try {
+            const text = await res.text();
+            if (text) {
+              errMsg = `Erro (Status ${res.status}): ${text.slice(0, 100)}`;
+            }
+          } catch (_) {}
+        }
+        setToast({ message: errMsg, type: 'error' });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      setToast({ message: 'Falha de conexão ao salvar planilha.', type: 'error' });
+      setToast({ message: `Falha de conexão ao salvar planilha: ${e?.message || 'Erro de rede'}`, type: 'error' });
     } finally {
       setIsSaving(false);
     }
