@@ -1,0 +1,8 @@
+{
+  "name": "Planilha de Tarefas",
+  "description": "Uma planilha interativa ao estilo Excel para registrar, formatar, filtrar e gerenciar tarefas com colunas de prioridade, status, prazo e descrição detalhada.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
